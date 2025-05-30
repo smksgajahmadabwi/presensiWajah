@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PRESENSI DIGITAL</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+            color: #333;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            text-align: center;
+            color: #2c3e50;
+			margin-bottom: -0.15em;
+        }
+		h2 {
+            text-align: center;
+            color: #2c3e50;
+        }
+        .video-container {
+            position: relative;
+            width: 400px;
+            margin: 0 auto;
+        }
+        #video {
+            width: 100%;
+            border-radius: 8px;
+            background-color: #000;
+        }
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+        .controls {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin: 20px 0;
+        }
+        button {
+            padding: 10px 20px;
+            background-color: #3498db;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #2980b9;
+        }
+        button#stopBtn {
+            background-color: #e74c3c;
+        }
+        button#stopBtn:hover {
+            background-color: #c0392b;
+        }
+        button#captureBtn {
+            background-color: #2ecc71;
+        }
+        button#captureBtn:hover {
+            background-color: #27ae60;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 12px;
+            text-align: left;
+        }
+        th {
+            background-color: #3498db;
+            color: white;
+        }
+        tr:nth-child(even) {
+            background-color: #f2f2f2;
+        }
+        .status {
+            padding: 5px 10px;
+            border-radius: 5px;
+            font-weight: bold;
+            text-align: center;
+        }
+        .present {
+            background-color: #2ecc71;
+            color: white;
+        }
+        .image-cell img {
+            max-width: 100px;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>PRESENSI DIGITAL</h1>
+        <h2>SMK GAJAH MADA BANYUWANGI</h2>
+        <div class="video-container">
+            <video id="video" width="400" height="300" autoplay muted></video>
+        </div>
+        
+        <div class="controls">
+            <button id="startBtn">Mulai Presensi</button>
+            <button id="stopBtn">Hentikan</button>
+            <button id="captureBtn">Ambil Gambar</button>
+        </div>
+        
+        <h2>Daftar Hadir</h2>
+        <table id="attendanceTable">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Nama</th>
+                    <th>Waktu</th>
+                    <th>Status</th>
+                    <th>Gambar</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+    <script>
+        // DOM elements
+        const video = document.getElementById('video');
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const captureBtn = document.getElementById('captureBtn');
+        const attendanceTable = document.getElementById('attendanceTable').getElementsByTagName('tbody')[0];
+        
+        // Variables
+        let intervalId = null;
+        let canvas;
+        let faceMatcher = null;
+        let labeledFaceDescriptors = [];
+        let attendanceData = [];
+        let nextId = 1;
+        
+        // Daftar orang yang sudah terdaftar dengan 5 gambar referensi
+        const registeredPeople = [
+            { 
+                name: "ABDUL SHOBIR", 
+                images: [
+                    "data/obing_1.jpg",
+                    "data/obing_2.jpg",
+                    "data/obing_3.jpg",
+                    "data/obing_4.jpg",
+                    "data/obing_5.jpg"
+                ] 
+            },
+            { 
+                name: "ACH. FADHOIL", 
+                images: [
+                    "data/iil_1.jpg",
+                    "data/iil_2.jpg",
+                    "data/iil_3.jpg",
+                    "data/iil_4.jpg",
+                    "data/iil_5.jpg"
+                ] 
+            }
+        ];
+
+        // Load models
+        async function loadModels() {
+            await faceapi.nets.tinyFaceDetector.loadFromUri('https://justadudewhohacks.github.io/face-api.js/models');
+            await faceapi.nets.faceLandmark68Net.loadFromUri('https://justadudewhohacks.github.io/face-api.js/models');
+            await faceapi.nets.faceRecognitionNet.loadFromUri('https://justadudewhohacks.github.io/face-api.js/models');
+            
+            // Load registered faces
+            await loadRegisteredFaces();
+            console.log('Models loaded');
+        }
+        
+        // Load registered faces from images
+        async function loadRegisteredFaces() {
+            for (const person of registeredPeople) {
+                const descriptors = [];
+                
+                for (const imageUrl of person.images) {
+                    try {
+                        const img = await faceapi.fetchImage(imageUrl);
+                        const detection = await faceapi.detectSingleFace(img)
+                            .withFaceLandmarks()
+                            .withFaceDescriptor();
+                        
+                        if (detection) {
+                            descriptors.push(detection.descriptor);
+                        }
+                    } catch (error) {
+                        console.error(`Gagal memuat gambar ${imageUrl}:`, error);
+                    }
+                }
+                
+                if (descriptors.length > 0) {
+                    labeledFaceDescriptors.push(
+                        new faceapi.LabeledFaceDescriptors(person.name, descriptors)
+                    );
+                }
+            }
+            
+            if (labeledFaceDescriptors.length > 0) {
+                faceMatcher = new faceapi.FaceMatcher(labeledFaceDescriptors, 0.6);
+                console.log(`Model siap dengan ${labeledFaceDescriptors.length} orang terdaftar`);
+            } else {
+                console.log("Tidak ada data wajah terdaftar");
+            }
+        }
+
+        // Start video stream
+        async function startVideo() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: {} });
+                video.srcObject = stream;
+                console.log('Video stream started');
+            } catch (err) {
+                console.error('Error accessing camera:', err);
+                alert('Tidak dapat mengakses kamera. Pastikan Anda memberikan izin kamera.');
+            }
+        }
+        
+        // Start face recognition
+        async function startRecognition() {
+            if (intervalId) {
+                clearInterval(intervalId);
+            }
+            
+            if (!canvas) {
+                canvas = faceapi.createCanvasFromMedia(video);
+                document.querySelector('.video-container').append(canvas);
+            }
+            
+            const displaySize = { width: video.width, height: video.height };
+            faceapi.matchDimensions(canvas, displaySize);
+            
+            intervalId = setInterval(async () => {
+                const detections = await faceapi.detectAllFaces(video, 
+                    new faceapi.TinyFaceDetectorOptions())
+                    .withFaceLandmarks()
+                    .withFaceDescriptors();
+                
+                const resizedDetections = faceapi.resizeResults(detections, displaySize);
+                
+                canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+                faceapi.draw.drawDetections(canvas, resizedDetections);
+                
+                if (faceMatcher) {
+                    const results = resizedDetections.map(d => {
+                        if (d.descriptor) {
+                            return faceMatcher.findBestMatch(d.descriptor);
+                        }
+                        return null;
+                    });
+                    
+                    results.forEach((result, i) => {
+                        if (result) {
+                            const box = resizedDetections[i].detection.box;
+                            const drawBox = new faceapi.draw.DrawBox(box, {
+                                label: result.toString(),
+                                boxColor: result.distance < 0.5 ? '#00FF00' : '#FF0000',
+                                lineWidth: 2
+                            });
+                            drawBox.draw(canvas);
+                            
+                            if (result.distance < 0.5 && !isAlreadyRecorded(result.label)) {
+                                recordAttendance(result.label);
+                            }
+                        }
+                    });
+                }
+            }, 1000);
+        }
+        
+        function isAlreadyRecorded(name) {
+            const today = new Date().toLocaleDateString();
+            return attendanceData.some(record => 
+                record.name === name && 
+                new Date(record.timestamp).toLocaleDateString() === today
+            );
+        }
+        
+        function recordAttendance(name) {
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            const imageData = canvas.toDataURL('image/jpeg', 0.8);
+            
+            const timestamp = new Date();
+            const record = {
+                id: nextId++,
+                name: name,
+                timestamp: timestamp,
+                status: 'Hadir',
+                image: imageData
+            };
+            
+            attendanceData.unshift(record);
+            updateAttendanceTable();
+            saveAttendanceData();
+        }
+        
+        function updateAttendanceTable() {
+            attendanceTable.innerHTML = '';
+            attendanceData.forEach(record => {
+                const row = attendanceTable.insertRow();
+                
+                row.insertCell(0).textContent = record.id;
+                row.insertCell(1).textContent = record.name;
+                row.insertCell(2).textContent = record.timestamp.toLocaleString();
+                row.insertCell(3).innerHTML = `<span class="status present">${record.status}</span>`;
+                row.insertCell(4).innerHTML = `<img src="${record.image}" alt="Wajah ${record.name}">`;
+            });
+        }
+        
+        function saveAttendanceData() {
+            const dataToSave = attendanceData.map(record => ({
+                ...record,
+                image: null,
+                timestamp: record.timestamp.getTime()
+            }));
+            
+            localStorage.setItem('attendanceData', JSON.stringify(dataToSave));
+            localStorage.setItem('nextId', nextId.toString());
+        }
+        
+        function loadAttendanceData() {
+            const savedData = localStorage.getItem('attendanceData');
+            if (savedData) {
+                const parsedData = JSON.parse(savedData);
+                attendanceData = parsedData.map(record => ({
+                    ...record,
+                    timestamp: new Date(record.timestamp),
+                    image: null
+                }));
+                updateAttendanceTable();
+            }
+            
+            const savedId = localStorage.getItem('nextId');
+            if (savedId) {
+                nextId = parseInt(savedId);
+            }
+        }
+        
+        async function captureImage() {
+            try {
+                const detections = await faceapi.detectAllFaces(video, 
+                    new faceapi.TinyFaceDetectorOptions())
+                    .withFaceLandmarks()
+                    .withFaceDescriptors();
+                
+                if (detections.length === 0) {
+                    alert("Tidak ada wajah yang terdeteksi!");
+                    return;
+                }
+                
+                if (!faceMatcher || labeledFaceDescriptors.length === 0) {
+                    alert("Sistem belum memiliki data wajah terdaftar.");
+                    return;
+                }
+                
+                const bestMatch = faceMatcher.findBestMatch(detections[0].descriptor);
+                if (bestMatch.distance < 0.5) {
+                    recordAttendance(bestMatch.label);
+                } else {
+                    alert("Wajah tidak dikenali.");
+                }
+            } catch (error) {
+                console.error("Error in face detection:", error);
+                alert("Terjadi kesalahan dalam mendeteksi wajah.");
+            }
+        }
+        
+        function stopRecognition() {
+            if (intervalId) {
+                clearInterval(intervalId);
+                intervalId = null;
+                
+                if (canvas) {
+                    canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+                }
+            }
+        }
+        
+        // Event listeners
+        startBtn.addEventListener('click', startRecognition);
+        stopBtn.addEventListener('click', stopRecognition);
+        captureBtn.addEventListener('click', captureImage);
+        
+        // Initialize
+        loadModels().then(() => {
+            startVideo();
+            loadAttendanceData();
+        });
+    </script>
+</body>
+</html>
